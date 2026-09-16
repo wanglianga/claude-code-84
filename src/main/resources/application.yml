@@ -1,0 +1,36 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: port-inspection-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/portdb}
+    username: ${SPRING_DATASOURCE_USERNAME:portuser}
+    password: ${SPRING_DATASOURCE_PASSWORD:portpass123}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  jackson:
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+app:
+  jwt-secret: ${JWT_SECRET:port-inspection-demo-secret-key-0123456789abcdef}
+  jwt-expire-hours: 12
+  customs-delay-seconds: ${CUSTOMS_DELAY_SECONDS:3}
+  customs-sla-seconds: 60
+  seed-demo-data: ${SEED_DEMO_DATA:true}

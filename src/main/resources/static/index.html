@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>口岸跨境电商仓包裹查验与退运申报服务</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">🛃 口岸跨境电商仓 · 包裹查验与退运申报服务</div>
+  <div id="user-box"></div>
+</header>
+
+<!-- 公开查询（无需登录） -->
+<section id="public-section" class="card">
+  <h2>📦 包裹进度查询 <span class="tag">消费者·免登录</span></h2>
+  <div class="row">
+    <input id="track-input" placeholder="输入运单号，如 WB20260006" />
+    <button onclick="doTrack()">查询</button>
+  </div>
+  <div id="track-result"></div>
+</section>
+
+<!-- 登录 -->
+<section id="login-section" class="card">
+  <h2>🔐 用户登录</h2>
+  <div class="row">
+    <input id="login-username" placeholder="用户名" />
+    <input id="login-password" type="password" placeholder="密码" />
+    <button onclick="doLogin()">登录</button>
+  </div>
+  <div class="hint">
+    测试账号：merchant1/merchant123（商家）· merchant2/merchant123（高风险商家）· warehouse1/warehouse123（仓库）·
+    broker1/broker123（报关员）· cs1/cs123（客服）· customs1/customs123（海关）· finance1/finance123（财务）·
+    consumer1/consumer123（消费者）· admin/admin123（管理员）
+  </div>
+  <div id="login-error" class="error"></div>
+</section>
+
+<!-- 工作台 -->
+<section id="app-section" style="display:none">
+  <nav id="tabs"></nav>
+  <main id="content"></main>
+</section>
+
+<!-- 包裹档案弹窗 -->
+<div id="modal" class="modal" style="display:none">
+  <div class="modal-body">
+    <div class="modal-head"><span id="modal-title"></span><button onclick="closeModal()">✕</button></div>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

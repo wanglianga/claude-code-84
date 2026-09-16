@@ -1,0 +1,42 @@
+# 口岸跨境电商仓包裹查验与退运申报服务
+# 项目名由环境变量 COMPOSE_PROJECT_NAME 固定，不要在此文件中指定 name。
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-portdb}
+      POSTGRES_USER: ${POSTGRES_USER:-portuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portpass123}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - internal
+    # 数据库不发布到宿主端口，仅 compose 内部网络访问
+
+  app:
+    build: .
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-portdb}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-portuser}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-portpass123}
+      JWT_SECRET: ${JWT_SECRET:-port-inspection-demo-secret-key-0123456789abcdef}
+      CUSTOMS_DELAY_SECONDS: ${CUSTOMS_DELAY_SECONDS:-3}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+    ports:
+      - "${CC_PUBLISH_PORT}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
