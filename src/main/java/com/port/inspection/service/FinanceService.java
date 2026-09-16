@@ -6,6 +6,7 @@ import com.port.inspection.model.*;
 import com.port.inspection.model.enums.*;
 import com.port.inspection.repository.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +21,7 @@ public class FinanceService {
     private final TaxRecordRepository taxRecordRepository;
     private final CompensationRepository compensationRepository;
     private final ParcelRepository parcelRepository;
+    private final ReturnOrderRepository returnOrderRepository;
     private final DeclarationService declarationService;
     private final ParcelEventService eventService;
 
@@ -28,17 +30,32 @@ public class FinanceService {
     @Transactional
     public TaxRecord payTax(Long taxId, User actor) {
         TaxRecord t = taxRecordRepository.findById(taxId).orElseThrow(() -> BizException.notFound("税费记录"));
+        // 退运/销毁终态后未缴税费已作废：不可再缴纳（4xx），从源头杜绝缴税覆盖终态
+        if (t.getStatus() == TaxStatus.VOID) {
+            throw new BizException("该税费已作废，不可缴纳"
+                    + (t.getVoidReason() != null ? "（" + t.getVoidReason() + "）" : ""), HttpStatus.CONFLICT);
+        }
         if (t.getStatus() != TaxStatus.PENDING) {
-            throw new BizException("该税费记录状态为 " + t.getStatus() + "，无法缴纳");
+            throw new BizException("该税费记录状态为 " + t.getStatus() + "，无法缴纳", HttpStatus.CONFLICT);
+        }
+        // 双重终态守卫：包裹已完成退运/销毁时，不允许通过缴税触发放行
+        Parcel parcel = parcelRepository.findById(t.getParcelId()).orElseThrow();
+        boolean dispositionDone = returnOrderRepository
+                .findByParcelIdAndStatus(t.getParcelId(), ReturnStatus.COMPLETED)
+                .stream().findAny().isPresent();
+        if (dispositionDone || parcel.getStatus() == PackageStatus.RETURNED
+                || parcel.getStatus() == PackageStatus.DESTROYED) {
+            throw new BizException("包裹已完成"
+                    + (parcel.getStatus() == PackageStatus.DESTROYED ? "销毁" : "退运")
+                    + "处置（终态），税费不应再缴纳；未缴税费以作废处理为准", HttpStatus.CONFLICT);
         }
         t.setStatus(TaxStatus.PAID);
         t.setPaidBy(actor.getDisplayName());
         t.setPaidAt(LocalDateTime.now());
         taxRecordRepository.save(t);
-        eventService.record(t.getParcelId(), null,
-                parcelRepository.findById(t.getParcelId()).orElseThrow().getStatus(),
+        eventService.record(t.getParcelId(), null, parcel.getStatus(),
                 "税费缴纳", actor, "缴纳" + t.getTaxType() + " ¥" + t.getAmount());
-        // 海关已审结且税费缴清 → 放行
+        // 海关已审结且税费缴清 → 放行；若处置已完成/已落终态，tryRelease 自身也会拒绝（4xx）
         declarationService.tryRelease(t.getDeclarationId(), actor);
         return t;
     }

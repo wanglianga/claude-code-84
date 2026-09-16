@@ -7,13 +7,16 @@ import com.port.inspection.model.enums.*;
 import com.port.inspection.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 申报单：商家、仓库、报关员、客服、海关接口、财务在同一申报单中协同处理。
@@ -30,8 +33,13 @@ public class DeclarationService {
     private final MaterialRepository materialRepository;
     private final TaxRecordRepository taxRecordRepository;
     private final CustomsTaskRepository customsTaskRepository;
+    private final ReturnOrderRepository returnOrderRepository;
     private final PrecheckService precheckService;
     private final ParcelEventService eventService;
+
+    /** 放行链路：仅海关审单通过（CUSTOMS_REVIEW）或查验通过待放行（INSPECTION）的包裹可被放行 */
+    private static final Set<PackageStatus> RELEASABLE_PARCEL =
+            EnumSet.of(PackageStatus.CUSTOMS_REVIEW, PackageStatus.INSPECTION);
 
     @Value("${app.customs-delay-seconds:3}")
     private long customsDelaySeconds;
@@ -211,18 +219,50 @@ public class DeclarationService {
 
     // ---------------- 放行（海关接受 + 税费缴清） ----------------
 
+    /**
+     * 放行（海关接受 + 税费缴清）。
+     * 终态守卫：仅当包裹与申报单仍处于可放行链路、且不存在已完成（含已核准待执行）的
+     * 退运/销毁处置时才能放行；已处退运/销毁终态时抛出 4xx，禁止缴税把终态覆盖回 RELEASED。
+     */
     @Transactional
     public void tryRelease(Long declarationId, User actor) {
         Declaration d = getDeclaration(declarationId);
+        Parcel p = parcelRepository.findById(d.getParcelId()).orElseThrow();
+
+        // 守卫一：已完成退运/销毁处置，或包裹/申报单已落退运/销毁终态 → 拒绝放行（409）
+        boolean completedDisposition = returnOrderRepository
+                .findByParcelIdAndStatus(p.getId(), ReturnStatus.COMPLETED)
+                .stream().findAny().isPresent();
+        boolean terminal = d.getStatus() == DeclarationStatus.RETURNED
+                || d.getStatus() == DeclarationStatus.DESTROYED
+                || p.getStatus() == PackageStatus.RETURNED
+                || p.getStatus() == PackageStatus.DESTROYED;
+        if (completedDisposition || terminal) {
+            String what = p.getStatus() == PackageStatus.DESTROYED ? "销毁" : "退运";
+            throw new BizException("包裹已完成" + what + "处置（终态），不能放行；未缴税费随处置作废，不应再缴纳",
+                    HttpStatus.CONFLICT);
+        }
+
+        // 守卫二：申报单须为海关审单通过 / 查验通过
         if (d.getStatus() != DeclarationStatus.ACCEPTED && d.getStatus() != DeclarationStatus.INSPECTION_PASSED) {
             return;
         }
+        // 守卫三：包裹须仍在可放行链路（海关审单中 / 查验中待放行）
+        if (!RELEASABLE_PARCEL.contains(p.getStatus())) {
+            return;
+        }
+        // 守卫四：已核准待执行的退运/销毁处置优先，放行挂起，避免与处置结论冲突
+        boolean pendingDisposition = returnOrderRepository.findByParcelId(p.getId()).stream()
+                .anyMatch(r -> r.getStatus() == ReturnStatus.APPROVED || r.getStatus() == ReturnStatus.EXECUTING);
+        if (pendingDisposition) {
+            return;
+        }
+
         List<TaxRecord> taxes = taxRecordRepository.findByDeclarationId(declarationId);
         boolean allPaid = !taxes.isEmpty() && taxes.stream().allMatch(t -> t.getStatus() == TaxStatus.PAID);
         if (!allPaid) {
             return;
         }
-        Parcel p = parcelRepository.findById(d.getParcelId()).orElseThrow();
         d.setStatus(DeclarationStatus.RELEASED);
         d.setUpdatedAt(LocalDateTime.now());
         declarationRepository.save(d);

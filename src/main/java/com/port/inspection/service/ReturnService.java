@@ -101,31 +101,94 @@ public class ReturnService {
         if (ro.getStatus() != ReturnStatus.APPROVED) {
             throw new BizException("处置单须先经海关核准");
         }
+        // 终态守卫：包裹已处于退运/销毁终态时拒绝重复执行，保证“已缴税费只退一次”
+        Parcel parcel = parcelRepository.findById(ro.getParcelId()).orElseThrow();
+        if (parcel.getStatus() == PackageStatus.RETURNED || parcel.getStatus() == PackageStatus.DESTROYED) {
+            throw new BizException("包裹已完成" + (parcel.getStatus() == PackageStatus.DESTROYED ? "销毁" : "退运")
+                    + "处置，终态不可重复执行");
+        }
         ro.setStatus(ReturnStatus.COMPLETED);
         ro.setCompletedAt(LocalDateTime.now());
         returnOrderRepository.save(ro);
 
-        Parcel p = parcelRepository.findById(ro.getParcelId()).orElseThrow();
-        PackageStatus old = p.getStatus();
-        PackageStatus done = ro.getType() == ReturnType.RETURN ? PackageStatus.RETURNED : PackageStatus.DESTROYED;
-        p.setStatus(done);
-        p.setUpdatedAt(LocalDateTime.now());
-        parcelRepository.save(p);
+        PackageStatus old = parcel.getStatus();
+        boolean isReturn = ro.getType() == ReturnType.RETURN;
+        PackageStatus done = isReturn ? PackageStatus.RETURNED : PackageStatus.DESTROYED;
+        parcel.setStatus(done);
+        parcel.setUpdatedAt(LocalDateTime.now());
+        parcelRepository.save(parcel);
 
-        // 已缴税费退还
+        // 同一申报单统一终态处理：已缴税费仅退一次；未缴税费转为不可缴纳的作废状态并保留原因
+        settleTaxes(ro, parcel, done, actor);
+
+        // 申报单随包裹进入退运/销毁终态，后续缴税不得再将其改回 RELEASED
+        DeclarationStatus decDone = isReturn ? DeclarationStatus.RETURNED : DeclarationStatus.DESTROYED;
+        if (ro.getDeclarationId() != null) {
+            declarationRepository.findById(ro.getDeclarationId()).ifPresent(d -> {
+                d.setStatus(decDone);
+                d.setUpdatedAt(LocalDateTime.now());
+                declarationRepository.save(d);
+            });
+        } else {
+            declarationRepository.findByParcelId(parcel.getId()).stream().findFirst().ifPresent(d -> {
+                ro.setDeclarationId(d.getId());
+                d.setStatus(decDone);
+                d.setUpdatedAt(LocalDateTime.now());
+                declarationRepository.save(d);
+            });
+        }
+
+        eventService.record(parcel.getId(), old, done,
+                isReturn ? "退运执行" : "销毁执行", actor,
+                (isReturn ? "包裹已退运出境" : "包裹已按海关要求销毁")
+                        + "，处置单 " + ro.getReturnNo() + "；税费清算：" + taxSettlementSummary(ro, parcel));
+        return ro;
+    }
+
+    /**
+     * 处置完成后的税费清算（围绕同一申报单）：
+     * PAID     → REFUNDED（仅一次，事件留痕）；
+     * PENDING  → VOID（不可再缴纳，记录作废原因）；
+     * REFUNDED → 保持（历史已退，不重复退款）；
+     * VOID     → 保持（历史已作废）。
+     */
+    private void settleTaxes(ReturnOrder ro, Parcel p, PackageStatus done, User actor) {
+        String action = ro.getType() == ReturnType.RETURN ? "退运" : "销毁";
+        String voidReason = action + "处置完成（处置单 " + ro.getReturnNo() + "，原因：" + ro.getReason()
+                + "），包裹已" + (ro.getType() == ReturnType.RETURN ? "退运出境" : "销毁")
+                + "，税费义务取消，未缴税费作废、不再缴纳";
         for (TaxRecord t : taxRecordRepository.findByParcelId(p.getId())) {
             if (t.getStatus() == TaxStatus.PAID) {
                 t.setStatus(TaxStatus.REFUNDED);
                 taxRecordRepository.save(t);
                 eventService.record(p.getId(), done, done, "税费退还", actor,
-                        "处置完成，已缴税费 ¥" + t.getAmount() + " 退回");
+                        action + "处置完成，已缴税费 ¥" + t.getAmount() + " 原路退回（仅退一次），税单 " + t.getId());
+            } else if (t.getStatus() == TaxStatus.PENDING) {
+                t.setStatus(TaxStatus.VOID);
+                t.setVoidReason(voidReason);
+                taxRecordRepository.save(t);
+                eventService.record(p.getId(), done, done, "税费作废", actor,
+                        "未缴" + t.getTaxType() + " ¥" + t.getAmount() + " 随" + action
+                                + "终态作废，不可再缴纳，税单 " + t.getId());
             }
         }
-        eventService.record(p.getId(), old, done,
-                ro.getType() == ReturnType.RETURN ? "退运执行" : "销毁执行", actor,
-                (ro.getType() == ReturnType.RETURN ? "包裹已退运出境" : "包裹已按海关要求销毁")
-                        + "，处置单 " + ro.getReturnNo());
-        return ro;
+    }
+
+    /** 处置执行事件中的税费清算结论摘要 */
+    private String taxSettlementSummary(ReturnOrder ro, Parcel p) {
+        int refunded = 0, voided = 0;
+        for (TaxRecord t : taxRecordRepository.findByParcelId(p.getId())) {
+            if (t.getStatus() == TaxStatus.REFUNDED) refunded++;
+            else if (t.getStatus() == TaxStatus.VOID) voided++;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (refunded > 0) sb.append("已缴税费退款 ").append(refunded).append(" 笔");
+        if (voided > 0) {
+            if (refunded > 0) sb.append("；");
+            sb.append("未缴税费作废 ").append(voided).append(" 笔（不可缴纳）");
+        }
+        if (refunded == 0 && voided == 0) sb.append("无在途税费");
+        return sb.toString();
     }
 
     public ReturnOrder getOrder(Long id) {

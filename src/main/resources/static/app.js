@@ -49,8 +49,13 @@ const DEC_STATUS = {
   DRAFT: '草稿', SUBMITTED: '已提交海关', ACCEPTED: '海关审单通过', INSPECTION_REQUIRED: '待查验',
   INSPECTING: '查验中', INSPECTION_PASSED: '查验通过', RELEASED: '已放行',
   SUPPLEMENT_REQUIRED: '待补材料', FAILED_DETAINED: '已扣留', FAILED_RETURN: '退运处置',
-  FAILED_DESTROY: '销毁处置', CLOSED: '已结案',
+  FAILED_DESTROY: '销毁处置', RETURNED: '已退运（终态）', DESTROYED: '已销毁（终态）', CLOSED: '已结案',
 };
+const TAX_BADGE = {
+  PENDING: ['待缴', 'b-orange'], PAID: ['已缴', 'b-green'],
+  REFUNDED: ['已退', 'b-gray'], VOID: ['已作废', 'b-red'],
+};
+const TAX_STATUS_NAME = { PENDING: '待缴', PAID: '已缴', REFUNDED: '已退', VOID: '已作废（不可缴纳）' };
 const ROLE_NAME = { MERCHANT: '商家', WAREHOUSE: '仓库', BROKER: '报关员', CS: '客服', CUSTOMS: '海关', FINANCE: '财务', CONSUMER: '消费者', ADMIN: '管理员' };
 const CHECK_NAME = { RESTRICTED_GOODS: '禁限售', PRICE_ANOMALY: '价格异常', ID_CARD_DUPLICATE: '身份证重复', TAX_RULE: '税费规则', RECIPIENT_FREQUENCY: '收件人频次', MERCHANT_RISK: '商家风险' };
 const LEVEL_BADGE = { PASS: ['通过', 'b-green'], WARN: ['预警', 'b-orange'], FAIL: ['不通过', 'b-red'] };
@@ -234,7 +239,10 @@ async function showArchive(id) {
       <div class="t-remark">${esc(e.remark || '')}</div>
       <div class="t-actor">责任人：${esc(e.actor || '-')}（${ROLE_NAME[e.actorRole] || e.actorRole || '-'}）</div></div>`).join('');
     const mats = (a.materials || []).map(m => `<tr><td>${MAT_NAME[m.materialType] || m.materialType}</td><td>${esc(m.fileName)}</td><td>${esc(m.uploadedBy || '-')}</td><td>${fmt(m.createdAt)}</td></tr>`).join('');
-    const taxes = (a.taxes || []).map(t => `<tr><td>${esc(t.taxType)}</td><td>¥${t.amount}</td><td>${badge({ PENDING: ['待缴', 'b-orange'], PAID: ['已缴', 'b-green'], REFUNDED: ['已退', 'b-gray'] }, t.status)}</td><td>${esc(t.paidBy || '-')}</td></tr>`).join('');
+    const taxes = (a.taxes || []).map(t => `<tr><td>${esc(t.taxType)}</td><td>¥${t.amount}</td><td>${badge(TAX_BADGE, t.status)}</td><td>${esc(t.paidBy || '-')}</td><td>${esc(t.voidReason || '-')}</td></tr>`).join('');
+    const returns = (a.returnOrders || []).map(r => `<tr><td>${esc(r.returnNo)}</td><td>${r.type === 'RETURN' ? '退运' : '销毁'}</td><td>${esc(r.reason)}</td>
+      <td>${badge({ REQUESTED: ['待核准', 'b-orange'], APPROVED: ['已核准', 'b-blue'], REJECTED: ['已驳回', 'b-red'], EXECUTING: ['执行中', 'b-blue'], COMPLETED: ['已完成', 'b-green'] }, r.status)}</td>
+      <td>${esc(r.approvedBy || '-')}</td><td>${fmt(r.completedAt)}</td></tr>`).join('');
     const comps = (a.compensations || []).map(x => `<tr><td>¥${x.amount}</td><td>${esc(x.reason)}</td><td>${esc(x.responsibleParty)}</td><td>${badge({ PENDING: ['待审批', 'b-orange'], APPROVED: ['已审批', 'b-blue'], PAID: ['已支付', 'b-green'], REJECTED: ['已驳回', 'b-red'] }, x.status)}</td></tr>`).join('');
     const decs = (a.declarations || []).map(dv => {
       const d = dv.declaration;
@@ -259,11 +267,15 @@ async function showArchive(id) {
       ${decs}
       <div class="section-title">材料（${(a.materials || []).length}）</div>
       <table><tbody>${mats || '<tr><td class="hint">无</td></tr>'}</tbody></table>
-      <div class="section-title">税费（${(a.taxes || []).length}）</div>
-      <table><tbody>${taxes || '<tr><td class="hint">无</td></tr>'}</tbody></table>
+      <div class="section-title">税费清算（${(a.taxes || []).length}）</div>
+      <table><thead><tr><th>税种</th><th>金额</th><th>状态</th><th>缴纳/退款人</th><th>作废原因</th></tr></thead>
+      <tbody>${taxes || '<tr><td colspan="5" class="hint">无</td></tr>'}</tbody></table>
+      <div class="section-title">退运/销毁处置（${(a.returnOrders || []).length}）</div>
+      <table><thead><tr><th>处置单号</th><th>类型</th><th>原因</th><th>状态</th><th>核準人</th><th>完成时间</th></tr></thead>
+      <tbody>${returns || '<tr><td colspan="6" class="hint">无</td></tr>'}</tbody></table>
       <div class="section-title">赔付（${(a.compensations || []).length}）</div>
       <table><tbody>${comps || '<tr><td class="hint">无</td></tr>'}</tbody></table>
-      <div class="section-title">全链路事件（时效/责任留痕）</div>
+      <div class="section-title">全链路事件（时效/责任留痕，含退运销毁与税费清算结论）</div>
       <div class="timeline">${events}</div>`);
   } catch (e) { toast(e.message, true); }
 }
@@ -358,13 +370,13 @@ async function showDec(id) {
     const d = await get(`/api/declarations/${id}`);
     const parts = (d.participants || []).map(x => `<tr><td>${ROLE_NAME[x.role]}</td><td>${esc(x.displayName || '')}</td></tr>`).join('');
     const mats = (d.materials || []).map(m => `<tr><td>${MAT_NAME[m.materialType]}</td><td>${esc(m.fileName)}</td><td>${esc(m.uploadedBy || '-')}</td><td>${fmt(m.createdAt)}</td></tr>`).join('');
-    const taxes = (d.taxes || []).map(t => `<tr><td>${esc(t.taxType)}</td><td>¥${t.amount}</td><td>${esc(t.status)}</td></tr>`).join('');
+    const taxes = (d.taxes || []).map(t => `<tr><td>${esc(t.taxType)}</td><td>¥${t.amount}</td><td>${badge(TAX_BADGE, t.status)}</td><td>${esc(t.voidReason || '-')}</td></tr>`).join('');
     openModal('申报单详情', `<div class="kv"><div><b>单号：</b>${esc(d.declaration.declarationNo)}</div>
       <div><b>状态：</b>${DEC_STATUS[d.declaration.status] || d.declaration.status}</div>
       <div><b>补材料要求：</b>${esc(d.declaration.supplementNote || '-')}</div></div>
       <div class="section-title">协同方</div><table><tbody>${parts}</tbody></table>
       <div class="section-title">材料</div><table><tbody>${mats || '<tr><td class="hint">无</td></tr>'}</tbody></table>
-      <div class="section-title">税费</div><table><tbody>${taxes || '<tr><td class="hint">无</td></tr>'}</tbody></table>`);
+      <div class="section-title">税费清算</div><table><thead><tr><th>税种</th><th>金额</th><th>状态</th><th>作废原因</th></tr></thead><tbody>${taxes || '<tr><td colspan="4" class="hint">无</td></tr>'}</tbody></table>`);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -462,7 +474,7 @@ async function viewFinance(c) {
   const taxes = await get('/api/finance/taxes');
   const comps = await get('/api/finance/compensations');
   const taxRows = taxes.map(t => `<tr><td>${esc(t.taxType)}</td><td>¥${t.amount}</td>
-    <td>${badge({ PENDING: ['待缴', 'b-orange'], PAID: ['已缴', 'b-green'], REFUNDED: ['已退', 'b-gray'] }, t.status)}</td>
+    <td>${badge(TAX_BADGE, t.status)}${t.voidReason ? `<br><span class="t-time">${esc(t.voidReason)}</span>` : ''}</td>
     <td>${esc(t.paidBy || '-')}</td>
     <td>${role === 'FINANCE' && t.status === 'PENDING' ? `<button class="sm green" onclick="doPayTax(${t.id})">缴纳</button>` : ''}</td></tr>`).join('');
   const compRows = comps.map(x => `<tr><td>¥${x.amount}</td><td>${esc(x.reason)}</td><td>${esc(x.responsibleParty)}</td>

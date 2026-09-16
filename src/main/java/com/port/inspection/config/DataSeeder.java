@@ -35,6 +35,7 @@ public class DataSeeder implements CommandLineRunner {
     private final ConsumerUrgeRepository urgeRepository;
     private final CompensationRepository compensationRepository;
     private final CustomsTaskRepository customsTaskRepository;
+    private final ReturnOrderRepository returnOrderRepository;
     private final BatchRepository batchRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -217,6 +218,63 @@ public class DataSeeder implements CommandLineRunner {
                 PackageStatus.RECEIVED, null);
         event(p13, null, PackageStatus.RECEIVED, "入仓登记", "跨贸商家-小王", "MERCHANT", "批次 BATCH001 入仓");
 
+        // 14. 已退运：海关 ACCEPTED 后申请退运，未缴税费随终态作废（不可再缴纳）
+        Parcel p14 = parcel("WB20260014", m1, "3304990099", "进口精华液", "420.00", 1,
+                "孙七", "320506199911204455", "13800000014", null, "R-01-01", "顺丰国际",
+                PackageStatus.RETURNED, null);
+        event(p14, null, PackageStatus.RECEIVED, "入仓登记", "跨贸商家-小王", "MERCHANT", "包裹入仓");
+        event(p14, PackageStatus.RECEIVED, PackageStatus.PRECHECK_PASSED, "申报前检查", "报关员-老陈", "BROKER", "申报前检查通过");
+        Declaration d14 = declaration(p14, m1, DeclarationStatus.RETURNED, "97.02");
+        event(p14, PackageStatus.PRECHECK_PASSED, PackageStatus.CUSTOMS_REVIEW, "申报提交", "报关员-老陈", "BROKER", "申报单已提交");
+        event(p14, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "海关受理", "系统", "SYSTEM", "海关审单通过，等待税费缴清后放行");
+        event(p14, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "退运申请", "跨贸商家-小王", "MERCHANT", "原因：商家要求退运，处置单待海关核准");
+        event(p14, PackageStatus.CUSTOMS_REVIEW, PackageStatus.RETURNING, "退运核准", "海关关员-老吴", "CUSTOMS", "海关核准退运");
+        taxTerminal(d14, p14, "跨境电商综合税", "97.02", TaxStatus.VOID,
+                "退运处置完成，包裹已退运出境，税费义务取消，未缴税费作废、不再缴纳");
+        event(p14, PackageStatus.RETURNED, PackageStatus.RETURNED, "税费作废", "口岸仓管-老张", "WAREHOUSE",
+                "未缴跨境电商综合税 ¥97.02 随退运终态作废，不可再缴纳");
+        event(p14, PackageStatus.RETURNING, PackageStatus.RETURNED, "退运执行", "口岸仓管-老张", "WAREHOUSE",
+                "包裹已退运出境；税费清算：未缴税费作废 1 笔（不可缴纳）");
+        completedReturn(p14, d14, ReturnType.RETURN, "商家要求退运");
+
+        // 15. 已销毁：查验不通过转销毁，已缴税费已退还（仅一次）
+        Parcel p15 = parcel("WB20260015", m1, "9601900000", "违规保健品", "360.00", 2,
+                "吴九", "350102198703096677", "13800000015", null, "R-02-02", "圆通国际",
+                PackageStatus.DESTROYED, null);
+        event(p15, null, PackageStatus.RECEIVED, "入仓登记", "跨贸商家-小王", "MERCHANT", "包裹入仓");
+        event(p15, PackageStatus.RECEIVED, PackageStatus.PRECHECK_PASSED, "申报前检查", "报关员-老陈", "BROKER", "申报前检查通过");
+        Declaration d15 = declaration(p15, m1, DeclarationStatus.DESTROYED, "65.52");
+        event(p15, PackageStatus.PRECHECK_PASSED, PackageStatus.CUSTOMS_REVIEW, "申报提交", "报关员-老陈", "BROKER", "申报单已提交");
+        event(p15, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "海关受理", "系统", "SYSTEM", "海关审单通过");
+        taxTerminal(d15, p15, "跨境电商综合税", "65.52", TaxStatus.REFUNDED, null);
+        event(p15, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "税费缴纳", "财务-小郑", "FINANCE", "缴纳跨境电商综合税 ¥65.52");
+        event(p15, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "销毁申请", "海关关员-老吴", "CUSTOMS", "原因：商品与申报不符，处置单待海关核准");
+        event(p15, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "销毁核准", "海关关员-老吴", "CUSTOMS", "海关核准销毁");
+        event(p15, PackageStatus.DESTROYED, PackageStatus.DESTROYED, "税费退还", "口岸仓管-老张", "WAREHOUSE",
+                "销毁处置完成，已缴税费 ¥65.52 原路退回（仅退一次）");
+        event(p15, PackageStatus.CUSTOMS_REVIEW, PackageStatus.DESTROYED, "销毁执行", "口岸仓管-老张", "WAREHOUSE",
+                "包裹已按海关要求销毁；税费清算：已缴税费退款 1 笔");
+        completedReturn(p15, d15, ReturnType.DESTROY, "商品与申报不符");
+
+        // 16. 已退运（消费者张三）：已缴税费退还，消费者可见“已退运、税费取消”
+        Parcel p16 = parcel("WB20260016", m1, "0901210000", "蓝山咖啡豆", "86.00", 2,
+                "张三", consumerIdCard, "13800000016", null, "R-01-03", "中通国际",
+                PackageStatus.RETURNED, null);
+        event(p16, null, PackageStatus.RECEIVED, "入仓登记", "跨贸商家-小王", "MERCHANT", "包裹入仓");
+        event(p16, PackageStatus.RECEIVED, PackageStatus.PRECHECK_PASSED, "申报前检查", "报关员-老陈", "BROKER", "申报前检查通过");
+        Declaration d16 = declaration(p16, m1, DeclarationStatus.RETURNED, "15.66");
+        event(p16, PackageStatus.PRECHECK_PASSED, PackageStatus.CUSTOMS_REVIEW, "申报提交", "报关员-老陈", "BROKER", "申报单已提交");
+        event(p16, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "海关受理", "系统", "SYSTEM", "海关审单通过");
+        taxTerminal(d16, p16, "跨境电商综合税", "15.66", TaxStatus.REFUNDED, null);
+        event(p16, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "税费缴纳", "财务-小郑", "FINANCE", "缴纳跨境电商综合税 ¥15.66");
+        event(p16, PackageStatus.CUSTOMS_REVIEW, PackageStatus.CUSTOMS_REVIEW, "退运申请", "客服-小周", "CS", "原因：收件人申请退运，处置单待海关核准");
+        event(p16, PackageStatus.CUSTOMS_REVIEW, PackageStatus.RETURNING, "退运核准", "海关关员-老吴", "CUSTOMS", "海关核准退运");
+        event(p16, PackageStatus.RETURNED, PackageStatus.RETURNED, "税费退还", "口岸仓管-老张", "WAREHOUSE",
+                "退运处置完成，已缴税费 ¥15.66 原路退回（仅退一次）");
+        event(p16, PackageStatus.RETURNING, PackageStatus.RETURNED, "退运执行", "口岸仓管-老张", "WAREHOUSE",
+                "包裹已退运出境；税费清算：已缴税费退款 1 笔");
+        completedReturn(p16, d16, ReturnType.RETURN, "收件人申请退运");
+
         // 批次 BATCH001
         Batch batch = new Batch();
         batch.setBatchNo("BATCH001");
@@ -323,6 +381,39 @@ public class DataSeeder implements CommandLineRunner {
             t.setPaidAt(LocalDateTime.now().minusHours(2));
         }
         taxRecordRepository.save(t);
+    }
+
+    /** 退运/销毁终态演示税费：VOID（带作废原因）或 REFUNDED（先缴后退） */
+    private void taxTerminal(Declaration d, Parcel p, String type, String amount, TaxStatus status, String voidReason) {
+        TaxRecord t = new TaxRecord();
+        t.setDeclarationId(d.getId());
+        t.setParcelId(p.getId());
+        t.setTaxType(type);
+        t.setAmount(new BigDecimal(amount));
+        t.setStatus(status);
+        if (status == TaxStatus.REFUNDED) {
+            t.setPaidBy("财务-小郑");
+            t.setPaidAt(LocalDateTime.now().minusHours(3));
+        }
+        if (status == TaxStatus.VOID) {
+            t.setVoidReason(voidReason);
+        }
+        taxRecordRepository.save(t);
+    }
+
+    /** 退运/销毁终态演示处置单（已完成） */
+    private void completedReturn(Parcel p, Declaration d, ReturnType type, String reason) {
+        ReturnOrder ro = new ReturnOrder();
+        ro.setReturnNo((type == ReturnType.RETURN ? "RTN" : "DST") + System.currentTimeMillis() + p.getId());
+        ro.setParcelId(p.getId());
+        ro.setDeclarationId(d.getId());
+        ro.setType(type);
+        ro.setReason(reason);
+        ro.setStatus(ReturnStatus.COMPLETED);
+        ro.setRequestedBy(type == ReturnType.RETURN ? "跨贸商家-小王" : "海关查验");
+        ro.setApprovedBy("海关关员-老吴");
+        ro.setCompletedAt(LocalDateTime.now().minusHours(1));
+        returnOrderRepository.save(ro);
     }
 
     private void event(Parcel p, PackageStatus from, PackageStatus to, String node,

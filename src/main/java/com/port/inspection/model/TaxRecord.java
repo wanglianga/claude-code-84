@@ -41,5 +41,10 @@ public class TaxRecord {
     private String paidBy;
 
     private LocalDateTime paidAt;
+
+    /** 作废原因（status=VOID 时必填：退运/销毁处置完成，税费取消、不可再缴纳） */
+    @Column(length = 255)
+    private String voidReason;
+
     private LocalDateTime createdAt = LocalDateTime.now();
 }

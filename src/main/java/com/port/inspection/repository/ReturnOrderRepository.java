@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 
 public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, Long> {
     List<ReturnOrder> findByParcelId(Long parcelId);
+    List<ReturnOrder> findByParcelIdAndStatus(Long parcelId, com.port.inspection.model.enums.ReturnStatus status);
     Optional<ReturnOrder> findByReturnNo(String returnNo);
     List<ReturnOrder> findByStatus(com.port.inspection.model.enums.ReturnStatus status);
     List<ReturnOrder> findAllByOrderByCreatedAtDesc();
