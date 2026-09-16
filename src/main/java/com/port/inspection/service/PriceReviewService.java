@@ -70,6 +70,13 @@ public class PriceReviewService {
         BigDecimal lowCut = rule.getAvgDealPrice().multiply(rule.getLowReportThreshold());
         BigDecimal warnCut = rule.getAvgDealPrice().multiply(rule.getWarnThreshold());
         boolean watched = brandRuleService.isWatched(p.getMerchantId(), p.getBrand(), p.getHsCode());
+        // 严格预审由“当前风险等级（HIGH）或未解除的重点名单/品类风险记录”持续决定，
+        // 单票 PASS 不能解除；只有明确降风险/解除重点名单后才恢复普通预审。
+        Merchant pm = merchantRepository.findById(p.getMerchantId()).orElse(null);
+        boolean highRisk = pm != null && pm.getRiskLevel() == RiskLevel.HIGH;
+        boolean strictSubject = watched || highRisk;
+        // 品类级低报记录只对其他商家产生预警提示，不阻断已解除处置的商家
+        boolean categoryFlagged = Boolean.TRUE.equals(rule.getReviewFlag());
         String base = "品牌「" + p.getBrand() + "」同类历史成交均价 ¥" + rule.getAvgDealPrice()
                 + "，本单申报单价 ¥" + p.getDeclaredPrice();
 
@@ -78,14 +85,14 @@ public class PriceReviewService {
             r.setMessage(base + "；已完成价格复核，按复核结论办理");
             return r;
         }
-        // 远低于立案阈值，或被列入重点复核的商家低于预警阈值 → 立案阻断
+        // 远低于普通立案阈值（60%），或严格主体低于严格阈值（80%）→ 立案阻断
         boolean farLow = p.getDeclaredPrice().compareTo(lowCut) < 0;
-        boolean strictLow = (watched || Boolean.TRUE.equals(rule.getReviewFlag()))
-                && p.getDeclaredPrice().compareTo(warnCut) < 0;
+        boolean strictLow = strictSubject && p.getDeclaredPrice().compareTo(warnCut) < 0;
         if ((farLow || strictLow) && !openReview) {
             createReview(p, rule, actor);
+            String why = highRisk ? "高风险商家" : "重点复核名单商家";
             r.setLevel(PrecheckLevel.FAIL);
-            r.setMessage(base + (farLow ? "，远低于历史成交价" : "，重点复核商家低于预警线")
+            r.setMessage(base + (farLow ? "，远低于历史成交价" : "，" + why + "且低于严格预审线（均价80%）")
                     + "，须上传采购凭证、促销说明、付款记录，经报关员价格复核后方可继续申报");
             return r;
         }
@@ -94,11 +101,11 @@ public class PriceReviewService {
             r.setMessage(base + "；存在未完成的价格复核单，须补齐三证并经报关员复核");
             return r;
         }
-        if (p.getDeclaredPrice().compareTo(warnCut) < 0
-                || watched || Boolean.TRUE.equals(rule.getReviewFlag())) {
+        if (p.getDeclaredPrice().compareTo(warnCut) < 0 || strictSubject || categoryFlagged) {
             r.setLevel(PrecheckLevel.WARN);
-            r.setMessage(base + "；" + (watched ? "商家在该品牌品类重点复核名单，" : "")
-                    + (Boolean.TRUE.equals(rule.getReviewFlag()) ? "该品类近期存低报记录，" : "")
+            r.setMessage(base + "；" + (highRisk ? "商家当前为高风险，" : "")
+                    + (watched ? "商家在该品牌品类重点复核名单，" : "")
+                    + (categoryFlagged ? "该品类近期存低报记录，" : "")
                     + "申报价偏低，请提前准备采购与付款凭证");
             return r;
         }
@@ -241,7 +248,8 @@ public class PriceReviewService {
                 taxInfo = "，申报单 " + d.getDeclarationNo() + " 应缴税费调整为 ¥" + newTax;
             }
         }
-        RiskChange rc = escalate(m, false);
+        // 低报价格补税属严重申报不实，与转人工查验一样直接提升为高风险并纳入重点复核
+        RiskChange rc = escalate(m, true);
         brandRuleService.applyReviewOutcome(o.getBrand(), o.getHsCode(), null,
                 PriceReviewDecision.SUPPLEMENT_TAX.name(), revised, m.getId());
         eventService.record(p.getId(), p.getStatus(), p.getStatus(), "价格复核结论", actor,

@@ -68,22 +68,71 @@ public class BrandPriceRuleService {
     }
 
     /**
-     * 复核结论沉淀到品牌规则：
-     * 继续申报 → 以申报价刷新均价、解除重点标记；补税 → 以认定价刷新均价并置重点；转人工 → 置重点。
+     * 复核结论沉淀到品牌规则。
+     * 关键：单票 PASS 只证明该票价格合理，仅把申报价滚动计入历史均价，
+     * <b>不清除</b>既有的品类重点标记（reviewFlag）与商家重点复核名单（watch）；
+     * 只有补税 / 转人工查验才置重点，且只能由“明确降风险 / 解除重点名单”解除。
      */
     @Transactional
     public BrandPriceRule applyReviewOutcome(String brand, String hsCode, String category,
                                              String decision, BigDecimal confirmedUnitPrice, Long merchantId) {
+        boolean suspect = "SUPPLEMENT_TAX".equals(decision) || "MANUAL_INSPECTION".equals(decision);
+        // PASS：仅滚动成交价均价，保留既有风险标记不动；存疑结论：以认定价滚动均价
         BrandPriceRule rule = recordDeal(brand, hsCode, category, confirmedUnitPrice);
         if (rule == null) return null;
-        boolean suspect = "SUPPLEMENT_TAX".equals(decision) || "MANUAL_INSPECTION".equals(decision);
-        rule.setReviewFlag(suspect);
         rule.setLastReviewDecision(decision);
         rule.setLastMerchantId(merchantId);
+        if (suspect) {
+            // 只有补税/转人工才能置重点；PASS 不允许把已有重点标记改回 false
+            rule.setReviewFlag(true);
+        }
         rule.setUpdatedAt(LocalDateTime.now());
         ruleRepository.save(rule);
-        upsertWatch(merchantId, brand, hsCode, suspect, decision);
+        if (suspect) {
+            upsertWatch(merchantId, brand, hsCode, true, decision);
+        }
+        // PASS 分支刻意不调用 upsertWatch(...,false,...)：不得解除既有重点复核处置
         return rule;
+    }
+
+    /**
+     * 明确降风险（HIGH 调低）时解除该商家全部品牌品类的重点复核名单，恢复普通预审。
+     */
+    @Transactional
+    public int releaseMerchantWatches(Long merchantId) {
+        var list = watchRepository.findByMerchantIdOrderByUpdatedAtDesc(merchantId);
+        int n = 0;
+        for (MerchantPriceWatch w : list) {
+            if (Boolean.TRUE.equals(w.getStricterReview())) {
+                w.setStricterReview(false);
+                w.setLastDecision("RELEASED_BY_RISK_DOWNGRADE");
+                w.setUpdatedAt(LocalDateTime.now());
+                watchRepository.save(w);
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** 显式解除某一条商家×品牌品类重点复核记录（管理员/海关） */
+    @Transactional
+    public MerchantPriceWatch releaseWatch(Long watchId) {
+        MerchantPriceWatch w = watchRepository.findById(watchId)
+                .orElseThrow(() -> new com.port.inspection.exception.BizException(
+                        "重点复核记录不存在", org.springframework.http.HttpStatus.NOT_FOUND));
+        w.setStricterReview(false);
+        w.setLastDecision("RELEASED_MANUALLY");
+        w.setUpdatedAt(LocalDateTime.now());
+        return watchRepository.save(w);
+    }
+
+    /** 全部重点复核名单（管理端） */
+    public java.util.List<MerchantPriceWatch> listAllWatches() {
+        return watchRepository.findAll();
+    }
+
+    public MerchantPriceWatch getWatch(Long id) {
+        return watchRepository.findById(id).orElse(null);
     }
 
     @Transactional

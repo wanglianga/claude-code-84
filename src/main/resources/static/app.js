@@ -481,8 +481,12 @@ const doReturnAct = (id, act) => run(async () => { await post(`/api/returns/${id
 
 /* ---------------- 申报价格异常复核 ---------------- */
 async function viewPriceReviews(c) {
-  const [list, rules] = await Promise.all([get('/api/price-reviews'), get('/api/brand-price-rules')]);
   const role = state.user.role;
+  const [list, rules] = await Promise.all([get('/api/price-reviews'), get('/api/brand-price-rules')]);
+  let watches = [];
+  if (['ADMIN', 'CUSTOMS', 'BROKER'].includes(role)) {
+    try { watches = await get('/api/brand-price-rules/watches'); } catch { watches = []; }
+  }
   const rows = list.map(r => {
     const acts = [];
     if (['MERCHANT', 'BROKER', 'CS', 'ADMIN'].includes(role) && r.status !== 'COMPLETED')
@@ -509,7 +513,21 @@ async function viewPriceReviews(c) {
     <div class="section-title" style="margin-top:18px">同品牌同类成交价规则（结论沉淀，后续申报提前提示）</div>
     <table><thead><tr><th>品牌</th><th>HS编码</th><th>历史成交均价</th><th>成交笔数</th><th>预审强度</th><th>最近复核结论</th></tr></thead>
     <tbody>${ruleRows || '<tr><td colspan="6" class="hint">暂无</td></tr>'}</tbody></table>`;
+  if (['ADMIN', 'CUSTOMS'].includes(role)) {
+    const active = watches.filter(w => w.stricterReview);
+    const wRows = active.map(w => `<tr><td>${esc(w.brand)}</td><td>${esc(w.hsCode)}</td>
+      <td>${esc(w.lastDecision ? (REVIEW_DECISION[w.lastDecision] || w.lastDecision) : '-')}</td>
+      <td><button class="sm red" onclick="doReleaseWatch(${w.id})">解除重点复核</button></td></tr>`).join('');
+    c.innerHTML += `<div class="section-title" style="margin-top:18px">商家价格重点复核名单（${active.length} 条未解除）
+      <span class="t-time">单票 PASS 不会解除；仅此处显式解除，或把商家调离 HIGH 风险时自动解除</span></div>
+      <table><thead><tr><th>品牌</th><th>HS编码</th><th>来源结论</th><th>操作</th></tr></thead>
+      <tbody>${wRows || '<tr><td colspan="4" class="hint">暂无未解除记录</td></tr>'}</tbody></table>`;
+  }
 }
+const doReleaseWatch = (id) => run(async () => {
+  if (!confirm('解除该商家该品牌品类的重点复核？解除后同品类恢复普通 60% 阈值预审。')) return;
+  await post(`/api/brand-price-rules/watches/${id}/release`); refresh();
+}, '已解除重点复核，恢复普通预审');
 function doReviewEvidence(id) {
   const type = prompt('凭证类型：PURCHASE_PROOF采购凭证 / PROMO_EXPLANATION促销说明 / PAYMENT_RECORD付款记录', 'PURCHASE_PROOF');
   if (!type) return;
