@@ -20,3 +20,8 @@ CLAUDE.md
 playwright-report/
 test-results/
 *.jsonl
+*.pem
+*.key
+*secret*
+*token*
+*credential*

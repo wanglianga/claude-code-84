@@ -36,6 +36,10 @@ public class DataSeeder implements CommandLineRunner {
     private final CompensationRepository compensationRepository;
     private final CustomsTaskRepository customsTaskRepository;
     private final ReturnOrderRepository returnOrderRepository;
+    private final BrandPriceRuleRepository brandPriceRuleRepository;
+    private final PriceReviewOrderRepository priceReviewOrderRepository;
+    private final MerchantPriceWatchRepository merchantPriceWatchRepository;
+    private final MaterialRepository materialRepository;
     private final BatchRepository batchRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -275,6 +279,60 @@ public class DataSeeder implements CommandLineRunner {
                 "包裹已退运出境；税费清算：已缴税费退款 1 笔");
         completedReturn(p16, d16, ReturnType.RETURN, "收件人申请退运");
 
+        // ---------- 申报价格异常复核演示（同品牌同类历史成交价比对） ----------
+        // 品牌成交价规则（历史均价、重点复核标记）
+        brandRule("A2至初", "0402109000", "婴幼儿奶粉", new BigDecimal("220.00"), 12, false, null);
+        brandRule("兰蔻LANCOME", "3304990099", "化妆品护肤品", new BigDecimal("300.00"), 8, true, "SUPPLEMENT_TAX");
+        brandRule("Apple苹果", "8517121000", "手机通讯设备", new BigDecimal("3200.00"), 20, false, null);
+        // 高风险商家 M002 已在兰蔻化妆品品类列入重点复核名单
+        priceWatch(m2.getId(), "兰蔻LANCOME", "3304990099", "SUPPLEMENT_TAX");
+
+        // 17. 申报价远低于历史成交价：已立案，待商家上传三证（采购凭证/促销说明/付款记录）
+        Parcel p17 = brandedParcel("WB20260017", m2, "兰蔻LANCOME", "3304990099", "兰蔻保湿面霜",
+                "150.00", "钱十七", "510107199405170017", "13800000017", "R-03-01", "顺丰国际",
+                PackageStatus.PRECHECK_FAILED, null);
+        event(p17, null, PackageStatus.RECEIVED, "入仓登记", "海淘商家-小李", "MERCHANT", "包裹入仓（高风险商家，兰蔻化妆品）");
+        event(p17, PackageStatus.RECEIVED, PackageStatus.PRECHECK_FAILED, "价格复核立案", "系统", "SYSTEM",
+                "品牌「兰蔻LANCOME」申报价 ¥150 远低于历史成交均价 ¥300，复核单待商家上传采购凭证/促销说明/付款记录");
+        priceReview(p17, null, m2, "兰蔻LANCOME", "3304990099", "150.00", "300.00",
+                PriceReviewStatus.AWAITING_EVIDENCE, null, null, "系统预检");
+
+        // 18. 三证已齐备，转报关员复核（待结论）
+        Parcel p18 = brandedParcel("WB20260018", m1, "兰蔻LANCOME", "3304990099", "兰蔻小黑瓶精华",
+                "210.00", "孙十八", "320506199911180018", "13800000018", "R-03-02", "中通国际",
+                PackageStatus.PRECHECK_FAILED, null);
+        event(p18, null, PackageStatus.RECEIVED, "入仓登记", "跨贸商家-小王", "MERCHANT", "包裹入仓（兰蔻化妆品）");
+        event(p18, PackageStatus.RECEIVED, PackageStatus.PRECHECK_FAILED, "价格复核立案", "系统", "SYSTEM",
+                "品牌「兰蔻LANCOME」申报价 ¥210 低于重点复核预警线，复核单待上传凭证");
+        reviewMaterial(p18, MaterialType.PURCHASE_PROOF, "采购合同-LANCOME-18.pdf", "跨贸商家-小王");
+        reviewMaterial(p18, MaterialType.PROMO_EXPLANATION, "618大促促销说明.pdf", "跨贸商家-小王");
+        reviewMaterial(p18, MaterialType.PAYMENT_RECORD, "银行付款回单-18.jpg", "跨贸商家-小王");
+        event(p18, PackageStatus.PRECHECK_FAILED, PackageStatus.PRECHECK_FAILED, "复核材料上传", "跨贸商家-小王", "MERCHANT",
+                "三证齐备（采购凭证/促销说明/付款记录），转报关员复核");
+        priceReview(p18, null, m1, "兰蔻LANCOME", "3304990099", "210.00", "300.00",
+                PriceReviewStatus.UNDER_REVIEW, null, null, "系统预检");
+
+        // 19. 已完成“补税”复核：按认定单价 ¥300 重算税费，商家风险上调，规则已沉淀
+        Parcel p19 = brandedParcel("WB20260019", m2, "兰蔻LANCOME", "3304990099", "兰蔻清滢柔肤水",
+                "140.00", "李十九", "440305199212190019", "13800000019", "R-03-03", "韵达国际",
+                PackageStatus.PRECHECK_PASSED, new BigDecimal("300.00"));
+        event(p19, null, PackageStatus.RECEIVED, "入仓登记", "海淘商家-小李", "MERCHANT", "包裹入仓（高风险商家，兰蔻化妆品）");
+        event(p19, PackageStatus.RECEIVED, PackageStatus.PRECHECK_FAILED, "价格复核立案", "系统", "SYSTEM",
+                "品牌「兰蔻LANCOME」申报价 ¥140 远低于历史成交均价 ¥300，须价格复核");
+        reviewMaterial(p19, MaterialType.PURCHASE_PROOF, "采购发票-LANCOME-19.pdf", "海淘商家-小李");
+        reviewMaterial(p19, MaterialType.PROMO_EXPLANATION, "促销活动说明-19.pdf", "海淘商家-小李");
+        reviewMaterial(p19, MaterialType.PAYMENT_RECORD, "付款流水-19.jpg", "海淘商家-小李");
+        event(p19, PackageStatus.PRECHECK_FAILED, PackageStatus.PRECHECK_PASSED, "价格复核结论", "报关员-老陈", "BROKER",
+                "申报价偏低，按认定单价 ¥300 补税，应缴税费调整为 ¥69.30");
+        event(p19, PackageStatus.PRECHECK_PASSED, PackageStatus.PRECHECK_PASSED, "风险等级调整", "报关员-老陈", "BROKER",
+                "低报价格补税，商家维持高风险，抽检比例 50%，同品牌同类后续严格预审");
+        event(p19, PackageStatus.PRECHECK_FAILED, PackageStatus.PRECHECK_PASSED, "申报前检查", "报关员-老陈", "BROKER",
+                "价格复核完成后复检通过，可继续申报");
+        Declaration d19 = declaration(p19, m2, DeclarationStatus.DRAFT, "69.30");
+        tax(d19, p19, "跨境电商综合税", "69.30", TaxStatus.PENDING);
+        priceReview(p19, d19, m2, "兰蔻LANCOME", "3304990099", "140.00", "300.00",
+                PriceReviewStatus.COMPLETED, PriceReviewDecision.SUPPLEMENT_TAX, new BigDecimal("300.00"), "报关员-老陈");
+
         // 批次 BATCH001
         Batch batch = new Batch();
         batch.setBatchNo("BATCH001");
@@ -414,6 +472,74 @@ public class DataSeeder implements CommandLineRunner {
         ro.setApprovedBy("海关关员-老吴");
         ro.setCompletedAt(LocalDateTime.now().minusHours(1));
         returnOrderRepository.save(ro);
+    }
+
+    // ---------- 价格异常复核演示辅助 ----------
+
+    private void brandRule(String brand, String hs, String category, BigDecimal avg,
+                           int dealCount, boolean reviewFlag, String lastDecision) {
+        BrandPriceRule r = new BrandPriceRule();
+        r.setBrand(brand);
+        r.setHsCode(hs);
+        r.setCategory(category);
+        r.setAvgDealPrice(avg);
+        r.setDealCount(dealCount);
+        r.setReviewFlag(reviewFlag);
+        r.setLastReviewDecision(lastDecision);
+        brandPriceRuleRepository.save(r);
+    }
+
+    private void priceWatch(Long merchantId, String brand, String hs, String lastDecision) {
+        MerchantPriceWatch w = new MerchantPriceWatch();
+        w.setMerchantId(merchantId);
+        w.setBrand(brand);
+        w.setHsCode(hs);
+        w.setStricterReview(true);
+        w.setLastDecision(lastDecision);
+        merchantPriceWatchRepository.save(w);
+    }
+
+    private Parcel brandedParcel(String waybill, Merchant m, String brand, String hs, String goods, String price,
+                                 String recipient, String idCard, String phone, String location, String channel,
+                                 PackageStatus status, BigDecimal taxablePrice) {
+        Parcel p = parcel(waybill, m, hs, goods, price, 1, recipient, idCard, phone, null, location, channel, status, null);
+        p.setBrand(brand);
+        p.setTaxablePrice(taxablePrice);
+        return parcelRepository.save(p);
+    }
+
+    private void reviewMaterial(Parcel p, MaterialType type, String fileName, String uploadedBy) {
+        Material m = new Material();
+        m.setParcelId(p.getId());
+        m.setMaterialType(type);
+        m.setFileName(fileName);
+        m.setFileUrl("https://files.example.com/" + fileName);
+        m.setUploadedBy(uploadedBy);
+        materialRepository.save(m);
+    }
+
+    private void priceReview(Parcel p, Declaration d, Merchant m, String brand, String hs, String declared,
+                             String refAvg, PriceReviewStatus status, PriceReviewDecision decision,
+                             BigDecimal revisedPrice, String requestedBy) {
+        PriceReviewOrder o = new PriceReviewOrder();
+        o.setReviewNo("PRV" + System.currentTimeMillis() + p.getId());
+        o.setParcelId(p.getId());
+        if (d != null) o.setDeclarationId(d.getId());
+        o.setMerchantId(m.getId());
+        o.setBrand(brand);
+        o.setHsCode(hs);
+        o.setDeclaredPrice(new BigDecimal(declared));
+        o.setReferenceAvgPrice(new BigDecimal(refAvg));
+        o.setStatus(status);
+        o.setDecision(decision);
+        o.setRevisedUnitPrice(revisedPrice);
+        o.setRequestedBy(requestedBy);
+        if (status == PriceReviewStatus.COMPLETED) {
+            o.setDecidedBy("报关员-老陈");
+            o.setDecidedAt(LocalDateTime.now().minusMinutes(40));
+            o.setDecisionNote(decision == PriceReviewDecision.SUPPLEMENT_TAX ? "凭证不足以证明促销价，按历史成交均价补税" : "复核完成");
+        }
+        priceReviewOrderRepository.save(o);
     }
 
     private void event(Parcel p, PackageStatus from, PackageStatus to, String node,

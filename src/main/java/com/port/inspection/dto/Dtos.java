@@ -14,6 +14,7 @@ public final class Dtos {
     public record ParcelCreateRequest(
             @NotBlank String waybillNo,
             @NotBlank String hsCode,
+            String brand,
             @NotBlank String goodsName,
             @NotNull @DecimalMin("0.01") BigDecimal declaredPrice,
             @NotNull @Min(1) Integer quantity,
@@ -31,6 +32,7 @@ public final class Dtos {
     public record ConsolidateRequest(
             @NotBlank String waybillNo,
             @NotBlank String hsCode,
+            String brand,
             @NotBlank String goodsName,
             @NotNull @DecimalMin("0.01") BigDecimal declaredPrice,
             @NotNull @Min(1) Integer quantity,
@@ -91,4 +93,13 @@ public final class Dtos {
     public record SupplementRequest(String note) {}
 
     public record SimulateDelayRequest(@NotNull @Min(0) Integer seconds) {}
+
+    /** 价格复核凭证上传复用 MaterialUploadRequest（materialType 限定三证） */
+
+    /** 报关员价格复核结论 */
+    public record PriceReviewDecisionRequest(
+            @NotBlank String decision,
+            java.math.BigDecimal revisedUnitPrice,
+            String note
+    ) {}
 }

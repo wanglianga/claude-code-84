@@ -34,7 +34,9 @@ public class DeclarationService {
     private final TaxRecordRepository taxRecordRepository;
     private final CustomsTaskRepository customsTaskRepository;
     private final ReturnOrderRepository returnOrderRepository;
-    private final PrecheckService precheckService;
+    private final PriceReviewService priceReviewService;
+    private final BrandPriceRuleService brandPriceRuleService;
+    private final TaxCalculator taxCalculator;
     private final ParcelEventService eventService;
 
     /** 放行链路：仅海关审单通过（CUSTOMS_REVIEW）或查验通过待放行（INSPECTION）的包裹可被放行 */
@@ -55,6 +57,8 @@ public class DeclarationService {
         if (p.getStatus() != PackageStatus.PRECHECK_PASSED) {
             throw new BizException("包裹须先通过申报前检查，当前状态: " + p.getStatus());
         }
+        // 存在未完成的价格异常复核单时，必须先完成复核才能继续申报
+        priceReviewService.assertNoOpenReview(parcelId);
         Merchant m = merchantRepository.findById(p.getMerchantId()).orElseThrow(() -> BizException.notFound("商家"));
 
         // 高风险商家：限制批量申报
@@ -75,7 +79,7 @@ public class DeclarationService {
         d.setDeclarationNo(genNo("DEC"));
         d.setParcelId(parcelId);
         d.setMerchantId(m.getId());
-        d.setTaxAmount(precheckService.computeTax(p));
+        d.setTaxAmount(taxCalculator.computeTax(p));
         declarationRepository.save(d);
 
         // 同一申报单协同方：商家、仓库、报关员、客服、海关接口、财务
@@ -93,6 +97,9 @@ public class DeclarationService {
         tax.setTaxType(p.getTradeMode() == TradeMode.BONDED ? "跨境电商综合税" : "一般贸易税");
         tax.setAmount(d.getTaxAmount());
         taxRecordRepository.save(tax);
+
+        // 价格复核已判“转人工查验”但当时尚无申报单的，创建后立即补开人工查验
+        priceReviewService.hookManualInspectionAfterDeclarationCreated(d, p);
 
         m.setTotalDeclarations(m.getTotalDeclarations() + 1);
         merchantRepository.save(m);
@@ -273,6 +280,9 @@ public class DeclarationService {
         parcelRepository.save(p);
         eventService.record(p.getId(), old, PackageStatus.RELEASED, "海关放行", actor,
                 "海关审结且税费缴清，包裹放行，可安排国内派送");
+
+        // 放行后把计税认定单价沉淀为该品牌同类可信成交价，供后续申报比对
+        brandPriceRuleService.recordDeal(p.getBrand(), p.getHsCode(), null, taxCalculator.taxableUnitPrice(p));
     }
 
     // ---------------- 查询 ----------------
@@ -310,6 +320,9 @@ public class DeclarationService {
             case CERT -> "认证证明";
             case PHOTO -> "照片";
             case EXPLANATION -> "情况说明";
+            case PURCHASE_PROOF -> "采购凭证";
+            case PROMO_EXPLANATION -> "促销说明";
+            case PAYMENT_RECORD -> "付款记录";
             case OTHER -> "其他材料";
         };
     }

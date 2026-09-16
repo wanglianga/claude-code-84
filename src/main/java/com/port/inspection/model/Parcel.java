@@ -33,6 +33,10 @@ public class Parcel {
     @Column(nullable = false, length = 20)
     private String hsCode;
 
+    /** 品牌（用于同品牌同类商品价格异常复核） */
+    @Column(length = 64)
+    private String brand;
+
     @Column(nullable = false, length = 128)
     private String goodsName;
 
@@ -80,6 +84,10 @@ public class Parcel {
     /** 海关系统延迟标记 */
     @Column(nullable = false)
     private Boolean customsDelayed = false;
+
+    /** 计税单价：默认等于申报价；价格复核补税时取认定成交价（影响税费） */
+    @Column(precision = 12, scale = 2)
+    private BigDecimal taxablePrice;
 
     private LocalDateTime createdAt = LocalDateTime.now();
     private LocalDateTime updatedAt = LocalDateTime.now();

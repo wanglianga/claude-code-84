@@ -57,9 +57,11 @@ const TAX_BADGE = {
 };
 const TAX_STATUS_NAME = { PENDING: '待缴', PAID: '已缴', REFUNDED: '已退', VOID: '已作废（不可缴纳）' };
 const ROLE_NAME = { MERCHANT: '商家', WAREHOUSE: '仓库', BROKER: '报关员', CS: '客服', CUSTOMS: '海关', FINANCE: '财务', CONSUMER: '消费者', ADMIN: '管理员' };
-const CHECK_NAME = { RESTRICTED_GOODS: '禁限售', PRICE_ANOMALY: '价格异常', ID_CARD_DUPLICATE: '身份证重复', TAX_RULE: '税费规则', RECIPIENT_FREQUENCY: '收件人频次', MERCHANT_RISK: '商家风险' };
+const CHECK_NAME = { RESTRICTED_GOODS: '禁限售', PRICE_ANOMALY: '价格异常', ID_CARD_DUPLICATE: '身份证重复', TAX_RULE: '税费规则', RECIPIENT_FREQUENCY: '收件人频次', MERCHANT_RISK: '商家风险', BRAND_PRICE: '品牌成交价复核' };
 const LEVEL_BADGE = { PASS: ['通过', 'b-green'], WARN: ['预警', 'b-orange'], FAIL: ['不通过', 'b-red'] };
-const MAT_NAME = { INVOICE: '发票', CERT: '认证证明', PHOTO: '照片', EXPLANATION: '情况说明', OTHER: '其他' };
+const MAT_NAME = { INVOICE: '发票', CERT: '认证证明', PHOTO: '照片', EXPLANATION: '情况说明', OTHER: '其他', PURCHASE_PROOF: '采购凭证', PROMO_EXPLANATION: '促销说明', PAYMENT_RECORD: '付款记录' };
+const REVIEW_STATUS = { AWAITING_EVIDENCE: ['待传三证', 'b-orange'], UNDER_REVIEW: ['待报关员复核', 'b-blue'], COMPLETED: ['复核完成', 'b-green'] };
+const REVIEW_DECISION = { PASS: '继续申报（价格合理）', SUPPLEMENT_TAX: '补税（认定成交价）', MANUAL_INSPECTION: '转人工查验' };
 const ACT_NAME = { OPEN_PHOTO: '开箱拍照', VERIFY_GOODS: '核对商品', SUPPLEMENT_DOC: '补充票据', SUBMIT_EXPLANATION: '提交说明' };
 const REASON_NAME = { GOODS_MISMATCH: '商品与申报不符', MISSING_CERT: '缺少认证', PRICE_TOO_LOW: '价格明显偏低', RECIPIENT_INFO_ERROR: '收件人资料错误', PACKAGE_DAMAGED: '包裹破损', MERCHANT_RETURN_REQUEST: '商家要求退运', OTHER: '其他' };
 const badge = (m, k) => { const v = m[k]; return v ? `<span class="badge ${v[1]}">${v[0]}</span>` : esc(k); };
@@ -129,6 +131,7 @@ const TABS = [
   { id: 'declarations', name: '📋 申报单', roles: ['MERCHANT', 'BROKER', 'CUSTOMS', 'FINANCE', 'ADMIN'] },
   { id: 'inspections', name: '🔍 海关查验', roles: ['WAREHOUSE', 'CUSTOMS', 'BROKER', 'ADMIN'] },
   { id: 'returns', name: '↩️ 退运/销毁', roles: ['MERCHANT', 'WAREHOUSE', 'CUSTOMS', 'CS', 'ADMIN'] },
+  { id: 'price-review', name: '🧾 价格复核', roles: ['MERCHANT', 'BROKER', 'CUSTOMS', 'ADMIN'] },
   { id: 'finance', name: '💰 税费赔付', roles: ['FINANCE', 'ADMIN', 'CS', 'WAREHOUSE'] },
   { id: 'batches', name: '🗂 批次处理', roles: ['MERCHANT', 'WAREHOUSE', 'ADMIN'] },
   { id: 'urges', name: '🔔 催件', roles: ['CS', 'ADMIN'] },
@@ -152,6 +155,7 @@ async function renderTab() {
     else if (state.tab === 'declarations') await viewDeclarations(c);
     else if (state.tab === 'inspections') await viewInspections(c);
     else if (state.tab === 'returns') await viewReturns(c);
+    else if (state.tab === 'price-review') await viewPriceReviews(c);
     else if (state.tab === 'finance') await viewFinance(c);
     else if (state.tab === 'batches') await viewBatches(c);
     else if (state.tab === 'urges') await viewUrges(c);
@@ -167,7 +171,7 @@ async function viewPackages(c) {
   const role = state.user.role;
   const rows = list.map(p => `<tr>
     <td><a href="javascript:showArchive(${p.id})">${esc(p.waybillNo)}</a>${p.customsDelayed ? ' <span class="badge b-red">海关延迟</span>' : ''}</td>
-    <td>${esc(p.goodsName)}<br><span class="t-time">${esc(p.hsCode)} · ¥${p.declaredPrice} ×${p.quantity}</span></td>
+    <td>${esc(p.goodsName)}<br><span class="t-time">${p.brand ? esc(p.brand) + ' · ' : ''}${esc(p.hsCode)} · ¥${p.declaredPrice} ×${p.quantity}${p.taxablePrice && Number(p.taxablePrice) !== Number(p.declaredPrice) ? ` · <span style="color:#b54708">计税价¥${p.taxablePrice}</span>` : ''}</span></td>
     <td>${esc(p.recipientName)}</td>
     <td>${esc(p.warehouseLocation || '-')}</td>
     <td>${p.batchNo ? esc(p.batchNo) : '-'}</td>
@@ -243,6 +247,9 @@ async function showArchive(id) {
     const returns = (a.returnOrders || []).map(r => `<tr><td>${esc(r.returnNo)}</td><td>${r.type === 'RETURN' ? '退运' : '销毁'}</td><td>${esc(r.reason)}</td>
       <td>${badge({ REQUESTED: ['待核准', 'b-orange'], APPROVED: ['已核准', 'b-blue'], REJECTED: ['已驳回', 'b-red'], EXECUTING: ['执行中', 'b-blue'], COMPLETED: ['已完成', 'b-green'] }, r.status)}</td>
       <td>${esc(r.approvedBy || '-')}</td><td>${fmt(r.completedAt)}</td></tr>`).join('');
+    const priceReviews = (a.priceReviews || []).map(r => `<tr><td>${esc(r.reviewNo)}</td><td>${esc(r.brand)}</td><td>¥${r.declaredPrice} / ¥${r.referenceAvgPrice ?? '-'}</td>
+      <td>${badge(REVIEW_STATUS, r.status)}</td><td>${r.decision ? REVIEW_DECISION[r.decision] : '-'}${r.revisedUnitPrice ? '（认定¥' + r.revisedUnitPrice + '）' : ''}</td><td>${esc(r.decidedBy || '-')}</td></tr>`).join('');
+    const brandRule = a.brandPriceRule;
     const comps = (a.compensations || []).map(x => `<tr><td>¥${x.amount}</td><td>${esc(x.reason)}</td><td>${esc(x.responsibleParty)}</td><td>${badge({ PENDING: ['待审批', 'b-orange'], APPROVED: ['已审批', 'b-blue'], PAID: ['已支付', 'b-green'], REJECTED: ['已驳回', 'b-red'] }, x.status)}</td></tr>`).join('');
     const decs = (a.declarations || []).map(dv => {
       const d = dv.declaration;
@@ -254,8 +261,8 @@ async function showArchive(id) {
     }).join('');
     openModal(`包裹档案 · ${esc(p.waybillNo)}`, `
       <div class="kv">
-        <div><b>商品：</b>${esc(p.goodsName)}（${esc(p.hsCode)}）</div>
-        <div><b>申报价：</b>¥${p.declaredPrice} ×${p.quantity}</div>
+        <div><b>商品：</b>${esc(p.goodsName)}（${esc(p.hsCode)}）${p.brand ? '　<b>品牌：</b>' + esc(p.brand) : ''}</div>
+        <div><b>申报价：</b>¥${p.declaredPrice} ×${p.quantity}${p.taxablePrice && Number(p.taxablePrice) !== Number(p.declaredPrice) ? `　<b style="color:#b54708">计税价：</b>¥${p.taxablePrice}（价格复核补税认定）` : ''}</div>
         <div><b>收件人：</b>${esc(p.recipientName)} ${esc(p.recipientIdCard)}</div>
         <div><b>商家：</b>${esc(a.merchant ? a.merchant.name : '-')}</div>
         <div><b>批次/仓位：</b>${esc(p.batchNo || '-')} / ${esc(p.warehouseLocation || '-')}</div>
@@ -273,6 +280,9 @@ async function showArchive(id) {
       <div class="section-title">退运/销毁处置（${(a.returnOrders || []).length}）</div>
       <table><thead><tr><th>处置单号</th><th>类型</th><th>原因</th><th>状态</th><th>核準人</th><th>完成时间</th></tr></thead>
       <tbody>${returns || '<tr><td colspan="6" class="hint">无</td></tr>'}</tbody></table>
+      ${(a.priceReviews || []).length || brandRule ? `<div class="section-title">申报价格异常复核（${(a.priceReviews || []).length}）${brandRule ? `　<span class="t-time">同品牌历史均价 ¥${brandRule.avgDealPrice}（${brandRule.reviewFlag ? '重点复核' : '正常'}，${brandRule.dealCount} 笔成交）</span>` : ''}</div>
+      <table><thead><tr><th>复核单号</th><th>品牌</th><th>申报/历史均价</th><th>状态</th><th>结论</th><th>复核人</th></tr></thead>
+      <tbody>${priceReviews || '<tr><td colspan="6" class="hint">无</td></tr>'}</tbody></table>` : ''}
       <div class="section-title">赔付（${(a.compensations || []).length}）</div>
       <table><tbody>${comps || '<tr><td class="hint">无</td></tr>'}</tbody></table>
       <div class="section-title">全链路事件（时效/责任留痕，含退运销毁与税费清算结论）</div>
@@ -293,6 +303,7 @@ function viewCreate(c) {
       <div><label>运单号*</label><input id="f-waybill" value="WB${Date.now()}"></div>
       <div><label>商品编码(HS)*</label><input id="f-hs" value="0402109000"></div>
       <div><label>商品名称*</label><input id="f-goods" value="婴幼儿配方奶粉"></div>
+      <div><label>品牌（价格复核比对用）</label><input id="f-brand" value="A2至初"></div>
       <div><label>申报价格*</label><input id="f-price" type="number" value="218"></div>
       <div><label>数量*</label><input id="f-qty" type="number" value="1"></div>
       <div><label>收件人*</label><input id="f-recip" value="测试收件人"></div>
@@ -311,7 +322,7 @@ function viewCreate(c) {
 async function doCreateParcel(consolidate) {
   const v = (id) => document.getElementById(id).value.trim();
   const body = {
-    waybillNo: v('f-waybill'), hsCode: v('f-hs'), goodsName: v('f-goods'),
+    waybillNo: v('f-waybill'), hsCode: v('f-hs'), brand: v('f-brand') || null, goodsName: v('f-goods'),
     declaredPrice: parseFloat(v('f-price')), quantity: parseInt(v('f-qty')),
     recipientName: v('f-recip'), recipientIdCard: v('f-idcard'), recipientPhone: v('f-phone'),
     batchNo: v('f-batch') || null, warehouseLocation: v('f-loc'), logisticsChannel: v('f-channel'),
@@ -467,6 +478,74 @@ async function viewReturns(c) {
     <tbody>${rows || '<tr><td colspan="6" class="hint">暂无处置单</td></tr>'}</tbody></table>`;
 }
 const doReturnAct = (id, act) => run(async () => { await post(`/api/returns/${id}/${act}`); refresh(); }, '操作成功');
+
+/* ---------------- 申报价格异常复核 ---------------- */
+async function viewPriceReviews(c) {
+  const [list, rules] = await Promise.all([get('/api/price-reviews'), get('/api/brand-price-rules')]);
+  const role = state.user.role;
+  const rows = list.map(r => {
+    const acts = [];
+    if (['MERCHANT', 'BROKER', 'CS', 'ADMIN'].includes(role) && r.status !== 'COMPLETED')
+      acts.push(`<button class="sm" onclick="doReviewEvidence(${r.id})">传三证</button>`);
+    if (['BROKER', 'CUSTOMS', 'ADMIN'].includes(role) && r.status === 'UNDER_REVIEW')
+      acts.push(`<button class="sm green" onclick="doReviewDecision(${r.id},'PASS')">继续申报</button>
+        <button class="sm orange" onclick="doReviewDecision(${r.id},'SUPPLEMENT_TAX')">补税</button>
+        <button class="sm red" onclick="doReviewDecision(${r.id},'MANUAL_INSPECTION')">转人工查验</button>`);
+    acts.push(`<button class="sm gray" onclick="showReview(${r.id})">详情</button>`);
+    const dec = r.decision ? `<br><span class="t-time">结论：${REVIEW_DECISION[r.decision] || r.decision}${r.revisedUnitPrice ? '（认定¥' + r.revisedUnitPrice + '）' : ''}</span>` : '';
+    return `<tr><td>${esc(r.reviewNo)}</td><td>${esc(r.brand)}<br><span class="t-time">${esc(r.hsCode)}</span></td>
+      <td>¥${r.declaredPrice}<br><span class="t-time">历史均价 ¥${r.referenceAvgPrice ?? '-'}</span></td>
+      <td>${badge(REVIEW_STATUS, r.status)}${dec}</td>
+      <td>${esc(r.decidedBy || '-')}</td><td>${acts.join('')}</td></tr>`;
+  }).join('');
+  const ruleRows = rules.map(r => `<tr><td>${esc(r.brand)}</td><td>${esc(r.hsCode)}</td><td>¥${r.avgDealPrice}</td><td>${r.dealCount}</td>
+    <td>${r.reviewFlag ? '<span class="badge b-red">重点复核</span>' : '<span class="badge b-green">正常</span>'}</td>
+    <td>${esc(r.lastReviewDecision ? (REVIEW_DECISION[r.lastReviewDecision] || r.lastReviewDecision) : '-')}</td></tr>`).join('');
+  c.innerHTML = `<div class="row" style="justify-content:space-between"><h3>申报价格异常复核</h3>
+      <button class="gray sm" onclick="refresh()">刷新</button></div>
+    <div class="hint">系统发现某品牌申报价远低于同品牌同类历史成交价时自动立案：商家上传 <b>采购凭证 / 促销说明 / 付款记录</b> 三证，报关员复核为“继续申报 / 补税 / 转人工查验”，结论影响商家风险并沉淀为品牌规则。</div>
+    <table><thead><tr><th>复核单号</th><th>品牌/HS</th><th>申报价/历史均价</th><th>状态与结论</th><th>复核人</th><th>操作</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="6" class="hint">暂无复核单</td></tr>'}</tbody></table>
+    <div class="section-title" style="margin-top:18px">同品牌同类成交价规则（结论沉淀，后续申报提前提示）</div>
+    <table><thead><tr><th>品牌</th><th>HS编码</th><th>历史成交均价</th><th>成交笔数</th><th>预审强度</th><th>最近复核结论</th></tr></thead>
+    <tbody>${ruleRows || '<tr><td colspan="6" class="hint">暂无</td></tr>'}</tbody></table>`;
+}
+function doReviewEvidence(id) {
+  const type = prompt('凭证类型：PURCHASE_PROOF采购凭证 / PROMO_EXPLANATION促销说明 / PAYMENT_RECORD付款记录', 'PURCHASE_PROOF');
+  if (!type) return;
+  const name = prompt('文件名：', type + '-' + Date.now() + '.pdf');
+  if (!name) return;
+  run(async () => { await post(`/api/price-reviews/${id}/evidence`, { materialType: type.trim().toUpperCase(), fileName: name, fileUrl: 'https://files.example.com/' + encodeURIComponent(name) }); refresh(); }, '凭证已上传（三证齐备后自动转报关员复核）');
+}
+function doReviewDecision(id, decision) {
+  let price = null, note = '';
+  if (!confirm('确认结论：' + REVIEW_DECISION[decision] + '？')) return;
+  if (decision === 'SUPPLEMENT_TAX') {
+    const p = prompt('认定计税单价（留空则按历史成交均价）：', '');
+    if (p === null) return; price = p ? parseFloat(p) : null;
+    note = prompt('复核备注：', '申报价偏低，按认定成交价补税') || '申报价偏低，按认定成交价补税';
+  } else if (decision === 'MANUAL_INSPECTION') {
+    note = prompt('复核备注：', '凭证不足，转人工查验') || '凭证不足，转人工查验';
+  } else {
+    note = prompt('复核备注：', '凭证齐备、促销价合理，继续申报') || '凭证齐备、价格合理';
+  }
+  run(async () => { await post(`/api/price-reviews/${id}/decision`, { decision, revisedUnitPrice: price, note }); refresh(); }, '复核结论已出具');
+}
+async function showReview(id) {
+  try {
+    const d = await get(`/api/price-reviews/${id}`);
+    const r = d.review;
+    const ev = (d.evidence || []).map(m => `<tr><td>${MAT_NAME[m.materialType] || m.materialType}</td><td>${esc(m.fileName)}</td><td>${esc(m.uploadedBy || '-')}</td><td>${fmt(m.createdAt)}</td></tr>`).join('');
+    openModal('价格复核 · ' + r.reviewNo, `<div class="kv">
+      <div><b>品牌/品类：</b>${esc(r.brand)} / ${esc(r.hsCode)}</div>
+      <div><b>申报单价：</b>¥${r.declaredPrice}　<b>历史均价：</b>¥${r.referenceAvgPrice ?? '-'}</div>
+      <div><b>状态：</b>${badge(REVIEW_STATUS, r.status)}　<b>结论：</b>${r.decision ? REVIEW_DECISION[r.decision] : '-'}</div>
+      <div><b>认定计税单价：</b>${r.revisedUnitPrice ? '¥' + r.revisedUnitPrice : '-'}　<b>复核人：</b>${esc(r.decidedBy || '-')}</div>
+      <div><b>备注：</b>${esc(r.decisionNote || '-')}</div></div>
+      <div class="section-title">三证材料</div>
+      <table><thead><tr><th>类型</th><th>文件</th><th>上传人</th><th>时间</th></tr></thead><tbody>${ev || '<tr><td colspan="4" class="hint">暂无</td></tr>'}</tbody></table>`);
+  } catch (e) { toast(e.message, true); }
+}
 
 /* ---------------- 税费赔付 ---------------- */
 async function viewFinance(c) {

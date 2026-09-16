@@ -30,6 +30,8 @@ public class PrecheckService {
     private final TaxRuleRepository taxRuleRepository;
     private final ParcelRepository parcelRepository;
     private final MerchantRepository merchantRepository;
+    private final TaxCalculator taxCalculator;
+    private final PriceReviewService priceReviewService;
     private final ParcelEventService eventService;
 
     @Transactional
@@ -49,6 +51,8 @@ public class PrecheckService {
         results.add(checkTax(p));
         results.add(checkRecipientFrequency(p));
         results.add(checkMerchantRisk(p));
+        // 第 7 项：同品牌同类商品历史成交价复核（命中远低阈值会自动立案）
+        results.add(priceReviewService.evaluate(p, actor));
         precheckRepository.saveAll(results);
 
         boolean failed = results.stream().anyMatch(r -> r.getLevel() == PrecheckLevel.FAIL);
@@ -193,13 +197,9 @@ public class PrecheckService {
         return r;
     }
 
-    /** 按贸易模式计算税费 */
+    /** 按贸易模式计算税费（计税单价取价格复核补税认定价） */
     public BigDecimal computeTax(Parcel p) {
-        Optional<TaxRule> rule = taxRuleRepository.findByHsCode(p.getHsCode());
-        BigDecimal rate = rule.map(t -> p.getTradeMode() == TradeMode.BONDED ? t.getTaxRate() : t.getGeneralTaxRate())
-                .orElse(new BigDecimal("0.0910"));
-        return p.getDeclaredPrice().multiply(BigDecimal.valueOf(p.getQuantity()))
-                .multiply(rate).setScale(2, RoundingMode.HALF_UP);
+        return taxCalculator.computeTax(p);
     }
 
     private PrecheckResult newResult(Parcel p, CheckType type) {

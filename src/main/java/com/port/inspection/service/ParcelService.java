@@ -31,6 +31,8 @@ public class ParcelService {
     private final CompensationRepository compensationRepository;
     private final ConsumerUrgeRepository urgeRepository;
     private final ReturnOrderRepository returnOrderRepository;
+    private final PriceReviewOrderRepository priceReviewOrderRepository;
+    private final BrandPriceRuleRepository brandPriceRuleRepository;
     private final MerchantRepository merchantRepository;
     private final ParcelEventService eventService;
 
@@ -45,6 +47,7 @@ public class ParcelService {
         p.setWaybillNo(req.waybillNo());
         p.setMerchantId(merchant.getMerchantId());
         p.setHsCode(req.hsCode());
+        p.setBrand(req.brand());
         p.setGoodsName(req.goodsName());
         p.setDeclaredPrice(req.declaredPrice());
         p.setQuantity(req.quantity());
@@ -69,7 +72,7 @@ public class ParcelService {
     @Transactional
     public Parcel consolidate(Dtos.ConsolidateRequest req, User merchant) {
         Dtos.ParcelCreateRequest base = new Dtos.ParcelCreateRequest(
-                req.waybillNo(), req.hsCode(), req.goodsName(), req.declaredPrice(), req.quantity(),
+                req.waybillNo(), req.hsCode(), req.brand(), req.goodsName(), req.declaredPrice(), req.quantity(),
                 req.recipientName(), req.recipientIdCard(), req.recipientPhone(), req.batchNo(),
                 req.warehouseLocation(), req.logisticsChannel(), req.tradeMode());
         Parcel p = createParcel(base, merchant);
@@ -185,6 +188,11 @@ public class ParcelService {
         archive.put("compensations", compensationRepository.findByParcelId(parcelId));
         archive.put("urges", urgeRepository.findByParcelId(parcelId));
         archive.put("returnOrders", returnOrderRepository.findByParcelId(parcelId));
+        archive.put("priceReviews", priceReviewOrderRepository.findByParcelIdOrderByCreatedAtDesc(parcelId));
+        if (p.getBrand() != null && !p.getBrand().isBlank()) {
+            archive.put("brandPriceRule",
+                    brandPriceRuleRepository.findByBrandAndHsCode(p.getBrand().trim(), p.getHsCode()).orElse(null));
+        }
 
         List<Map<String, Object>> declarations = new ArrayList<>();
         for (Declaration d : declarationRepository.findByParcelId(parcelId)) {

@@ -1,6 +1,29 @@
 # 口岸跨境电商仓包裹查验与退运申报服务
 
-基于 **Java 17 + Spring Boot 3 + PostgreSQL 16** 的口岸跨境电商仓包裹查验与退运申报服务。覆盖包裹入仓、申报前检查、六方协同申报、海关查验、补材料/扣留/退运/销毁、放行派送、税费赔付、批次处理、商家风控与消费者进度查询全链路。
+基于 **Java 17 + Spring Boot 3 + PostgreSQL 16** 的口岸跨境电商仓包裹查验与退运申报服务。覆盖包裹入仓、申报前检查、六方协同申报、**申报价格异常复核（同品牌历史成交价比对）**、海关查验、补材料/扣留/退运/销毁、放行派送、税费赔付、批次处理、商家风控与消费者进度查询全链路。
+
+## 原始需求（本次新增：申报价格异常复核 Prompt，一字不漏）
+
+> 增加申报价格异常复核。系统发现某品牌商品申报价远低于历史成交价时，服务要求商家上传采购凭证、促销说明和付款记录。报关员复核后，包裹可继续申报、补税或转人工查验，处理结果会影响商家风险等级。价格复核结论会沉淀到同品牌同类商品规则，后续申报会提前提示商家。风险等级提高后，商家后续同类商品会进入更严格预审。
+
+## 申报价格异常复核（本次新增）
+
+围绕“**某品牌 + HS 品类**”的历史成交价做闭环管理：
+
+1. **自动比对立案**：申报前检查新增第 7 项 `BRAND_PRICE`。包裹带品牌时，与 `brand_price_rules` 同品牌同类历史均价比对——申报单价低于均价 ×60%（远低阈值）自动立案；在重点复核名单/品类已存疑的商家，低于均价 ×80%（预警线）即立案。未完成复核的包裹**不能创建申报单**。
+2. **三证齐备**：商家在复核单上传 **采购凭证 `PURCHASE_PROOF` / 促销说明 `PROMO_EXPLANATION` / 付款记录 `PAYMENT_RECORD`**，三证齐备自动由 `AWAITING_EVIDENCE` 转 `UNDER_REVIEW`。
+3. **报关员三结论**（影响商家风险等级）：
+   - **继续申报 PASS**：价格合理，风险不加重，以申报价沉淀为可信成交价。
+   - **补税 SUPPLEMENT_TAX**：按认定计税单价（缺省取历史均价）写入包裹 `taxable_price`，重算申报单与未缴税费金额；商家风险上调一级（LOW→MEDIUM→HIGH，抽检比例/提前传票同步收紧），违规 +1。
+   - **转人工查验 MANUAL_INSPECTION**：商家直接置高风险；已建申报单立即布控查验，未建的在创建申报单时自动补开人工查验指令。
+4. **结论沉淀**：写回同品牌同类规则（滚动成交均价、重点复核标记、最近结论），并对“商家×品牌×品类”建立重点复核名单 `merchant_price_watches`。
+5. **后续提前提示 + 更严格预审**：命中重点名单/品类存疑时，后续同类申报在预检阶段给出更严格的预警或立案（预警线从 60% 提高到 80%）；正常放行的计税价也会滚动沉淀为可信成交价。
+
+| 模块 | 端点 |
+|---|---|
+| 价格复核 | `GET /api/price-reviews`、`GET /api/price-reviews/{id}`、`POST /api/price-reviews/{id}/evidence`（传三证）、`POST /api/price-reviews/{id}/decision`（PASS/SUPPLEMENT_TAX/MANUAL_INSPECTION） |
+| 品牌规则 | `GET /api/brand-price-rules`、`GET /api/brand-price-rules/my-watches`（商家查看重点复核名单） |
+
 
 ## 原始需求（本次缺陷修复 Prompt，一字不漏）
 
@@ -77,7 +100,8 @@ docker compose up -d --build
 首次启动自动写入（`SEED_DEMO_DATA=true`）：
 
 - **商家**：M001 低风险；M002 高风险（抽检 50%、批次限 20、须提前传票、违规 3 次）。
-- **包裹**：16 个运单覆盖全状态机 —— `WB20260001` 待预检、`WB20260002` 预检通过、`WB20260003` 海关审单中（启动后约 3 秒自动回执）、`WB20260004` 查验中（含待执行查验指令）、`WB20260005` 已放行、`WB20260006` 派送中（张三，含未处理催件）、`WB20260007` 待补材料（缺认证）、`WB20260008` 预检失败（象牙禁售）、`WB20260009` 高风险商家包裹、`WB20260010` 已签收（张三）、`WB20260011~13` 批次 BATCH001（其中 `WB20260013` 象牙手镯会在批次处理时被隔离）、`WB20260014` **已退运（未缴税随终态作废 VOID）**、`WB20260015` **已销毁（已缴税已退 REFUNDED）**、`WB20260016` **已退运（张三，已缴税已退，消费者可见税费结清结论）**。
+- **包裹**：19 个运单覆盖全状态机 —— `WB20260001` 待预检、`WB20260002` 预检通过、`WB20260003` 海关审单中（启动后约 3 秒自动回执）、`WB20260004` 查验中（含待执行查验指令）、`WB20260005` 已放行、`WB20260006` 派送中（张三，含未处理催件）、`WB20260007` 待补材料（缺认证）、`WB20260008` 预检失败（象牙禁售）、`WB20260009` 高风险商家包裹、`WB20260010` 已签收（张三）、`WB20260011~13` 批次 BATCH001（其中 `WB20260013` 象牙手镯会在批次处理时被隔离）、`WB20260014` **已退运（未缴税随终态作废 VOID）**、`WB20260015` **已销毁（已缴税已退 REFUNDED）**、`WB20260016` **已退运（张三，已缴税已退，消费者可见税费结清结论）**、`WB20260017` **价格复核待传三证（兰蔻面霜低报）**、`WB20260018` **价格复核三证齐备待结论**、`WB20260019` **价格复核“补税”已完成（按 ¥300 重算税费 ¥69.30）**。
+- **价格规则**：3 条同品牌同类成交价规则（A2至初奶粉、兰蔻化妆品[重点复核]、Apple 手机），高风险商家 M002 在兰蔻品类列入重点复核名单。
 - **参考数据**：7 条税则（跨境综合税率/一般贸易税率/参考价）、7 条禁限售规则。
 - **财务**：多条税费记录（待缴/已缴）、1 条待审批赔付。
 
@@ -91,7 +115,7 @@ docker compose up -d --build
        └─ 不通过 → 补材料(可重报/商家拒绝→扣留) / 扣留 / 退运 / 销毁
 ```
 
-- **申报前检查**：禁限售、价格异常（对照税则参考价）、身份证重复（一证多人）、税费规则（超 5000 元个人限值提示转一般贸易）、同收件人 7 天频次、商家历史风险。
+- **申报前检查**：禁限售、价格异常（对照税则参考价）、身份证重复（一证多人）、税费规则（超 5000 元个人限值提示转一般贸易）、同收件人 7 天频次、商家历史风险、**同品牌同类历史成交价复核（远低于自动立案价格复核）**，共 7 项。
 - **六方协同申报单**：创建时自动纳入商家、仓库、报关员、客服、海关接口、财务；材料、税费、查验、事件全部挂在同一申报单下。
 - **高风险商家管控**：提高抽检比例（海关布控概率）、限制批量申报单数、要求申报前上传发票，三者均可在线调整。
 - **批次处理**：批次内包裹逐单预检，通过进正常放行队列，失败置 `HOLD` 隔离，互不影响整批时效。
@@ -129,6 +153,7 @@ curl http://localhost:$PORT/api/public/track/WB20260006
 | 包裹 | `POST /api/packages`、`POST /api/packages/consolidate`、`GET /api/packages`、`GET /api/packages/{id}`、`GET /api/packages/{id}/archive`、`POST /api/packages/{id}/precheck`、`POST /api/packages/{id}/convert-trade-mode`、`POST /api/packages/{id}/dispatch`、`POST /api/packages/{id}/deliver` |
 | 申报 | `POST /api/declarations?parcelId=`、`GET /api/declarations`、`GET /api/declarations/{id}`、`POST /api/declarations/{id}/submit`、`POST /api/declarations/{id}/materials`、`POST /api/declarations/{id}/refuse-supplement` |
 | 查验 | `GET /api/inspections/orders`、`POST /api/inspections/orders/{id}/actions`、`POST /api/inspections/orders/{id}/result` |
+| 价格复核 | `GET /api/price-reviews`、`GET /api/price-reviews/{id}`、`POST /api/price-reviews/{id}/evidence`、`POST /api/price-reviews/{id}/decision`、`GET /api/brand-price-rules`、`GET /api/brand-price-rules/my-watches` |
 | 退运/销毁 | `POST /api/returns?parcelId=`、`POST /api/returns/{id}/approve|reject|execute` |
 | 批次 | `POST /api/batches`、`GET /api/batches/{id}`、`POST /api/batches/{id}/process` |
 | 财务 | `GET /api/finance/taxes`、`POST /api/finance/taxes/{id}/pay`、`GET|POST /api/finance/compensations`、`POST /api/finance/compensations/{id}/approve|pay` |
@@ -155,6 +180,6 @@ curl http://localhost:$PORT/api/public/track/WB20260006
     │   └── service/           # 预检/申报/海关/查验/退运/批次/财务/风控/催件
     └── resources
         ├── application.yml
-        ├── db/migration/      # V1 表结构、V2 税则与禁限售参考数据、V3 税费 void_reason（退运销毁终态清算）
+        ├── db/migration/      # V1 表结构、V2 税则与禁限售、V3 税费 void_reason、V4 价格异常复核（品牌规则/复核单/重点名单）
         └── static/            # 演示前端（index.html/app.js/style.css）
 ```
